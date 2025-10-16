@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+tasks-log.json
+last-notify.json
+last-error.log
+notify-failure.json
+
+# Test output
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+.DS_Store
+
+# Build output
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Repo generation temp folders
+generated-repos/

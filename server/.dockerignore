@@ -1,0 +1,22 @@
+# Docker ignore file
+node_modules
+npm-debug.log
+tasks-log.json
+last-notify.json
+last-error.log
+notify-failure.json
+.env
+.env.local
+.env.*.local
+generated-repos
+logs
+test-results
+playwright-report
+.git
+.gitignore
+README.md
+INSTRUCTIONS.md
+TODOS.md
+*.md
+!package.json
+!package-lock.json

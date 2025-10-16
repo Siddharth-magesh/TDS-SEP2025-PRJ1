@@ -1,0 +1,37 @@
+{
+  "name": "llm-code-deployment-server",
+  "version": "1.0.0",
+  "description": "LLM-assisted code deployment server with GitHub Pages integration",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "deploy": "node scripts/create_repo_and_push.js",
+    "simulate": "bash scripts/simulate_request.sh",
+    "lint": "eslint src/ scripts/ tests/"
+  },
+  "keywords": [
+    "llm",
+    "github-pages",
+    "automation",
+    "deployment"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "@octokit/rest": "^20.0.2",
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.1",
+    "eslint": "^8.55.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
