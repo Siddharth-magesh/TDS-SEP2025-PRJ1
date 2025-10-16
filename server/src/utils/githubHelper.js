@@ -5,10 +5,18 @@ import fs from 'fs/promises';
 import path from 'path';
 import { execSync } from 'child_process';
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const GITHUB_USER = process.env.GITHUB_USER_OR_ORG;
+// Get environment variables dynamically (not at import time)
+function getGitHubToken() {
+  return process.env.GITHUB_TOKEN;
+}
 
-const octokit = new Octokit({ auth: GITHUB_TOKEN });
+function getGitHubUser() {
+  return process.env.GITHUB_USER_OR_ORG;
+}
+
+function getOctokit() {
+  return new Octokit({ auth: getGitHubToken() });
+}
 
 /**
  * Create GitHub repository and push files
@@ -42,16 +50,47 @@ export async function createRepoAndPush({ repoName, files, email, task, brief })
   }
   
   try {
-    // Step 1: Create repository
+    // Try gh CLI first (it's more reliable for empty repos)
+    const GITHUB_USER = getGitHubUser();
+    const GITHUB_TOKEN = getGitHubToken();
+    
+    if (!GITHUB_USER || !GITHUB_TOKEN) {
+      throw new Error('Missing GITHUB_TOKEN or GITHUB_USER_OR_ORG environment variables');
+    }
+    
+    // Check if gh CLI is available
+    try {
+      execSync('gh --version', { stdio: 'pipe' });
+      console.log('Using gh CLI (more reliable for new repos)...');
+      return await createRepoViaGhCLI({ repoName, files, email, task, brief });
+    } catch (ghError) {
+      console.log('gh CLI not available, falling back to Octokit API...');
+    }
+    
+    // Fallback to Octokit API
+    const octokit = getOctokit();
+    
+    // Step 1: Create repository with auto_init to avoid empty repo issues
     console.log('Creating GitHub repository...');
     const { data: repo } = await octokit.repos.createForAuthenticatedUser({
       name: repoName,
       description: `${task} - ${brief.substring(0, 100)}`,
       public: true,
-      auto_init: false
+      auto_init: true  // Initialize with README to avoid empty repo
     });
     
     console.log(`Repository created: ${repo.html_url}`);
+    
+    // Wait a moment for GitHub to initialize the repo
+    await new Promise(resolve => setTimeout(resolve, 9000)); // Wait 9 seconds
+    
+    // Get the current main branch ref to use as parent
+    const { data: ref } = await octokit.git.getRef({
+      owner: GITHUB_USER,
+      repo: repoName,
+      ref: 'heads/main'
+    });
+    const parentSha = ref.object.sha;
     
     // Step 2: Create files via GitHub API (tree + commit)
     console.log('Creating files...');
@@ -80,23 +119,24 @@ export async function createRepoAndPush({ repoName, files, email, task, brief })
       tree: fileBlobs
     });
     
-    // Step 4: Create commit
+    // Step 4: Create commit (with parent this time)
     const { data: commit } = await octokit.git.createCommit({
       owner: GITHUB_USER,
       repo: repoName,
       message: `Initial commit - ${task}`,
       tree: tree.sha,
-      parents: []
+      parents: [parentSha]  // Link to the auto-init commit
     });
     
     console.log(`Commit created: ${commit.sha}`);
     
-    // Step 5: Update main branch reference
-    await octokit.git.createRef({
+    // Step 5: Update main branch reference (use updateRef instead of createRef)
+    await octokit.git.updateRef({
       owner: GITHUB_USER,
       repo: repoName,
-      ref: 'refs/heads/main',
-      sha: commit.sha
+      ref: 'heads/main',
+      sha: commit.sha,
+      force: true
     });
     
     // Step 6: Enable GitHub Pages
@@ -143,6 +183,8 @@ export async function createRepoAndPush({ repoName, files, email, task, brief })
 async function createRepoViaGhCLI({ repoName, files, email, task, brief }) {
   console.log('Using gh CLI fallback...');
   
+  const GITHUB_USER = getGitHubUser();
+  
   try {
     // Check if gh is installed
     execSync('gh --version', { stdio: 'pipe' });
@@ -171,16 +213,61 @@ async function createRepoViaGhCLI({ repoName, files, email, task, brief }) {
     execSync('git init', { cwd: tempDir, stdio: 'pipe' });
     execSync('git add .', { cwd: tempDir, stdio: 'pipe' });
     execSync(`git commit -m "Initial commit - ${task}"`, { cwd: tempDir, stdio: 'pipe' });
+    execSync('git branch -M main', { cwd: tempDir, stdio: 'pipe' }); // Ensure branch is named 'main'
     
-    // Create GitHub repo
-    execSync(`gh repo create ${repoName} --public --source=. --push`, { cwd: tempDir, stdio: 'pipe' });
+    // Create GitHub repo and push
+    const createOutput = execSync(`gh repo create ${repoName} --public --source=. --remote=origin`, { cwd: tempDir, encoding: 'utf-8' });
+    console.log('Repo created, now pushing...');
+    execSync('git push -u origin main', { cwd: tempDir, stdio: 'pipe' });
     
-    // Enable Pages
+    console.log(`Repository created: https://github.com/${GITHUB_USER}/${repoName}`);
+    
+    // Wait for GitHub to process the repo and verify main branch exists
+    console.log('Waiting for GitHub to process the repository...');
+    const octokitClient = getOctokit();
+    let branchExists = false;
+    for (let i = 0; i < 15; i++) {
+      await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+      try {
+        await octokitClient.repos.getBranch({
+          owner: GITHUB_USER,
+          repo: repoName,
+          branch: 'main'
+        });
+        branchExists = true;
+        console.log('Main branch confirmed to exist');
+        break;
+      } catch (error) {
+        console.log(`Waiting for main branch to be available... (attempt ${i + 1}/15)`);
+      }
+    }
+    
+    if (!branchExists) {
+      console.warn('Main branch not detected after 45 seconds, but continuing...');
+    }
+    
+    // Enable Pages using Octokit API (more reliable)
+    console.log('Enabling GitHub Pages...');
     try {
-      execSync(`gh api repos/${GITHUB_USER}/${repoName}/pages -X POST -f source[branch]=main -f source[path]=/`, 
-        { cwd: tempDir, stdio: 'pipe' });
-    } catch {
-      console.warn('Could not enable Pages via gh CLI');
+      await octokitClient.repos.createPagesSite({
+        owner: GITHUB_USER,
+        repo: repoName,
+        source: {
+          branch: 'main',
+          path: '/'
+        }
+      });
+      console.log('GitHub Pages enabled successfully');
+    } catch (pagesError) {
+      console.warn('Could not enable Pages via API:', pagesError.message);
+      // Try gh CLI as fallback
+      try {
+        execSync(`gh api repos/${GITHUB_USER}/${repoName}/pages -X POST -f source[branch]=main -f source[path]=/`, 
+          { cwd: tempDir, stdio: 'pipe' });
+        console.log('GitHub Pages enabled via gh CLI');
+      } catch {
+        console.warn('Could not enable Pages via gh CLI either');
+      }
     }
     
     // Get commit SHA
